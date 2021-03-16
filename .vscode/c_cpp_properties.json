@@ -4,7 +4,9 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "/home/pace/anaconda3/envs/conbench2/include"
+                "/home/pace/anaconda3/envs/conbench2/include",
+                "/home/pace/anaconda3/envs/conbench2/include/python3.7m",
+                "/home/pace/anaconda3/envs/conbench2/lib/python3.7/site-packages/numpy/core/include"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/clang-10",

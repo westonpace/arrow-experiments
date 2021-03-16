@@ -32,79 +32,94 @@ using namespace std::chrono;
 #include <arrow/status.h>
 #include <arrow/table.h>
 #include <arrow/util/iterator.h>
+#include <arrow/util/thread_pool.h>
 
 using arrow::Status;
 
-const int64_t BLOCK_SIZE = 4 * 1024 * 1024;
+const int64_t BLOCK_SIZE = 1 * 1024 * 1024;
 
 namespace {
 
 Status RunMain(int argc, char **argv) {
 
-  if (argc < 3) {
+  if (argc < 4) {
     return arrow::Status::Invalid(
-        "You must specify a CSV directory to read and true/false for threads");
+        "Usage [csv_file] [use_threads] [use_async] [num_threads]");
   }
 
-  std::string csv_dir = argv[1];
+  std::string csv_path = argv[1];
   std::string use_threads_option = argv[2];
+  std::string use_streaming_option = argv[3];
+  std::string num_threads_option = argv[4];
   bool use_threads = (use_threads_option == "true");
-  if (use_threads) {
+  bool use_streaming = (use_streaming_option == "true");
+  if (use_threads && !use_streaming) {
     std::cout << "Reading with AsyncTableReader" << std::endl;
+  } else if (!use_streaming) {
+    std::cout << "Reading with SerialTableReader" << std::endl;
   } else {
-    std::cout << "Reading with ThreadedTableReader" << std::endl;
+    std::cout << "Reading with StreamingTableReader" << std::endl;
   }
+  int num_threads = std::atoi(num_threads_option.c_str());
 
   auto read_options = arrow::csv::ReadOptions::Defaults();
   read_options.use_threads = use_threads;
+  read_options.block_size = BLOCK_SIZE;
 
-  // auto thread_pool = arrow::internal::GetCpuThreadPool();
-  // auto memory_pool = arrow::default_memory_pool();
-
-  auto selector = arrow::fs::FileSelector();
-  selector.base_dir = csv_dir;
-  selector.recursive = true;
-
-  auto format = std::make_shared<arrow::dataset::CsvFileFormat>();
-  auto fs_dataset_options = arrow::dataset::FileSystemFactoryOptions();
   auto fs = std::make_shared<arrow::fs::LocalFileSystem>();
-  fs_dataset_options.partitioning =
-      arrow::dataset::HivePartitioning::MakeFactory();
-  ARROW_ASSIGN_OR_RAISE(auto dataset_factory,
-                        arrow::dataset::FileSystemDatasetFactory::Make(
-                            fs, selector, format, fs_dataset_options));
 
-  auto finish_options = arrow::dataset::FinishOptions();
-  finish_options.validate_fragments = false;
+  arrow::SetCpuThreadPoolCapacity(num_threads);
 
-  auto inspect_options = arrow::dataset::InspectOptions();
-  inspect_options.fragments = 0;
-  finish_options.inspect_options = inspect_options;
-  ARROW_ASSIGN_OR_RAISE(auto dataset, dataset_factory->Finish(finish_options));
+  std::function<std::shared_ptr<arrow::Table>()> read_func;
+  if (use_streaming) {
+    read_func = [read_options, fs, csv_path]() {
+      auto input = fs->OpenInputStream(csv_path).ValueOrDie();
+      auto reader =
+          arrow::csv::StreamingReader::Make(
+              arrow::io::default_io_context().pool(), input, read_options,
+              arrow::csv::ParseOptions(), arrow::csv::ConvertOptions())
+              .ValueOrDie();
+      std::shared_ptr<arrow::Table> out;
+      if (!reader->ReadAll(&out).ok()) {
+        abort();
+      };
+      return out;
+    };
+  } else {
+    read_func = [read_options, fs, csv_path]() {
+      auto input = fs->OpenInputStream(csv_path).ValueOrDie();
+      auto reader =
+          arrow::csv::TableReader::Make(
+              arrow::io::default_io_context(), input, read_options,
+              arrow::csv::ParseOptions(), arrow::csv::ConvertOptions())
+              .ValueOrDie();
+      return reader->Read().ValueOrDie();
+    };
+  }
 
-  int64_t total_duration = 0;
+  int64_t total_count = 0;
   for (int i = 0; i < 1; i++) {
-    auto scan_options = std::make_shared<arrow::dataset::ScanOptions>();
-    auto scan_context = std::make_shared<arrow::dataset::ScanContext>();
-    scan_context->use_threads = true;
-    auto scanner_builder =
-        arrow::dataset::ScannerBuilder(dataset, scan_context);
-    scanner_builder.UseThreads(true);
-    ARROW_ASSIGN_OR_RAISE(auto scanner, scanner_builder.Finish());
-
     auto start = high_resolution_clock::now();
-    ARROW_ASSIGN_OR_RAISE(auto table, scanner->ToTable());
+    auto table = read_func();
     auto end = high_resolution_clock::now();
+
     auto duration = duration_cast<nanoseconds>(end - start).count();
+    total_count += duration;
+
     std::cout << "* Read table (" << table->num_rows() << ","
               << table->num_columns() << ")" << std::endl;
     std::cout.imbue(std::locale(""));
     std::cout << "Elsaped: " << std::fixed << duration << " nanoseconds"
               << std::endl;
-    total_duration += duration;
   }
-
-  std::cout << "Grand total: " << total_duration << " nanoseconds" << std::endl;
+  std::cout << "Total duration " << std::fixed << total_count << " nanoseconds"
+            << std::endl;
+  // std::cout << "Real futures created: "
+  //           << arrow::FutureCounters::real_futures_created.load() <<
+  //           std::endl;
+  // std::cout << "Finished futures created: "
+  //           << arrow::FutureCounters::finished_futures_created.load()
+  //           << std::endl;
 
   return Status::OK();
 }
