@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include <chrono>
 #include <cassert>
-#include <iostream>
+#include <chrono>
 #include <cstdlib>
+#include <iostream>
 
 using namespace std::chrono;
 
@@ -34,6 +34,7 @@ using namespace std::chrono;
 #include <arrow/status.h>
 #include <arrow/table.h>
 #include <arrow/util/iterator.h>
+#include <arrow/util/logging.h>
 
 using arrow::Status;
 
@@ -41,15 +42,16 @@ const int64_t BLOCK_SIZE = 4 * 1024 * 1024;
 
 namespace {
 
-  std::string SafeGetEnv(const std::string& name) {
-    char * env = std::getenv(name.c_str());
-    if(env == nullptr) {
-      std::cerr << "You must define " << name << " environment variable" << std::endl;
-      assert(false);
-    }
-    return env;
+std::string SafeGetEnv(const std::string &name) {
+  char *env = std::getenv(name.c_str());
+  if (env == nullptr) {
+    std::cerr << "You must define " << name << " environment variable"
+              << std::endl;
+    assert(false);
   }
-  
+  return env;
+}
+
 Status RunMain(int argc, char **argv) {
 
   if (argc < 3) {
@@ -66,6 +68,9 @@ Status RunMain(int argc, char **argv) {
     std::cout << "Reading with ThreadedTableReader" << std::endl;
   }
 
+  arrow::util::ArrowLog::StartArrowLog("ReadCsv",
+                                       arrow::util::ArrowLogLevel::ARROW_DEBUG);
+
   auto read_options = arrow::csv::ReadOptions::Defaults();
   read_options.use_threads = use_threads;
 
@@ -76,7 +81,8 @@ Status RunMain(int argc, char **argv) {
   if (csv_dir.substr(0, 5) == "s3://") {
     auto global_opts = arrow::fs::S3GlobalOptions();
     arrow::fs::InitializeS3(global_opts);
-    auto s3_options = arrow::fs::S3Options::FromAccessKey(SafeGetEnv("AWS_ACCESS_KEY_ID"), SafeGetEnv("AWS_SECRET_ACCESS_KEY"));
+    auto s3_options = arrow::fs::S3Options::FromAccessKey(
+        SafeGetEnv("AWS_ACCESS_KEY_ID"), SafeGetEnv("AWS_SECRET_ACCESS_KEY"));
     ARROW_ASSIGN_OR_RAISE(fs, arrow::fs::S3FileSystem::Make(s3_options));
     csv_dir = csv_dir.substr(5);
   } else {
@@ -91,7 +97,6 @@ Status RunMain(int argc, char **argv) {
 
   auto format = std::make_shared<arrow::dataset::CsvFileFormat>();
 
-  
   auto fs_dataset_options = arrow::dataset::FileSystemFactoryOptions();
   fs_dataset_options.partitioning =
       arrow::dataset::HivePartitioning::MakeFactory();
@@ -110,8 +115,7 @@ Status RunMain(int argc, char **argv) {
   int64_t total_duration = 0;
   for (int i = 0; i < 1; i++) {
     auto scan_options = std::make_shared<arrow::dataset::ScanOptions>();
-    auto scanner_builder =
-        arrow::dataset::ScannerBuilder(dataset);
+    auto scanner_builder = arrow::dataset::ScannerBuilder(dataset);
     scanner_builder.UseThreads(true);
     ARROW_ASSIGN_OR_RAISE(auto scanner, scanner_builder.Finish());
 
@@ -129,6 +133,7 @@ Status RunMain(int argc, char **argv) {
 
   std::cout << "Grand total: " << total_duration << " nanoseconds" << std::endl;
 
+  arrow::util::ArrowLog::ShutDownArrowLog();
   return Status::OK();
 }
 

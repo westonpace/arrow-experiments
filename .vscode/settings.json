@@ -51,7 +51,10 @@
         "thread": "cpp",
         "typeinfo": "cpp",
         "bit": "cpp",
-        "cinttypes": "cpp"
+        "cinttypes": "cpp",
+        "list": "cpp",
+        "unordered_set": "cpp",
+        "map": "cpp"
     },
     "python.formatting.provider": "black"
 }
