@@ -4,15 +4,17 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "/home/pace/anaconda3/envs/conbench2/include",
-                "/home/pace/anaconda3/envs/conbench2/include/python3.7m",
-                "/home/pace/anaconda3/envs/conbench2/lib/python3.7/site-packages/numpy/core/include"
+                "/home/pace/miniconda3/envs/conbench3/include/**"
             ],
             "defines": [],
-            "compilerPath": "/usr/bin/clang-10",
+            "compilerPath": "/usr/bin/c++",
             "cStandard": "c11",
-            "cppStandard": "c++14",
-            "intelliSenseMode": "clang-x64"
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerArgs": [
+                "-DREDO_MACROS"
+            ],
+            "compileCommands": ""
         }
     ],
     "version": 4

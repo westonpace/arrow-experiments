@@ -31,6 +31,7 @@ using namespace std::chrono;
 #include <arrow/result.h>
 #include <arrow/status.h>
 #include <arrow/table.h>
+#include <arrow/util/async_generator.h>
 #include <arrow/util/iterator.h>
 #include <arrow/util/thread_pool.h>
 
@@ -38,97 +39,106 @@ using arrow::Status;
 
 const int64_t BLOCK_SIZE = 1 * 1024 * 1024;
 
-namespace {
+namespace
+{
 
-Status RunMain(int argc, char **argv) {
+  Status RunMain(int argc, char **argv)
+  {
 
-  if (argc < 4) {
-    return arrow::Status::Invalid(
-        "Usage [csv_file] [use_threads] [use_async] [num_threads]");
-  }
+    if (argc < 2)
+    {
+      return arrow::Status::Invalid("Usage [csv_file]");
+    }
 
-  std::string csv_path = argv[1];
-  std::string use_threads_option = argv[2];
-  std::string use_streaming_option = argv[3];
-  std::string num_threads_option = argv[4];
-  bool use_threads = (use_threads_option == "true");
-  bool use_streaming = (use_streaming_option == "true");
-  if (use_threads && !use_streaming) {
-    std::cout << "Reading with AsyncTableReader" << std::endl;
-  } else if (!use_streaming) {
-    std::cout << "Reading with SerialTableReader" << std::endl;
-  } else {
-    std::cout << "Reading with StreamingTableReader" << std::endl;
-  }
-  int num_threads = std::atoi(num_threads_option.c_str());
+    std::string csv_path = argv[1];
 
-  auto read_options = arrow::csv::ReadOptions::Defaults();
-  read_options.use_threads = use_threads;
-  read_options.block_size = BLOCK_SIZE;
+    bool use_streaming = false;
+    bool use_threads = true;
+    if (argc > 2)
+    {
+      std::string use_streaming_option = argv[2];
+      use_streaming = use_streaming_option == "true";
+    }
+    if (argc > 3)
+    {
+      std::string use_threads_option = argv[3];
+      std::cout << "use_threads_option=" << use_threads_option << std::endl;
+      use_threads = use_threads_option != "false";
+    }
 
-  auto fs = std::make_shared<arrow::fs::LocalFileSystem>();
+    auto read_options = arrow::csv::ReadOptions::Defaults();
+    auto parse_options = arrow::csv::ParseOptions::Defaults();
+    auto convert_options = arrow::csv::ConvertOptions::Defaults();
 
-  arrow::SetCpuThreadPoolCapacity(num_threads);
+    std::cout << "use_threads=" << use_threads << std::endl;
+    read_options.use_threads = use_threads;
 
-  std::function<std::shared_ptr<arrow::Table>()> read_func;
-  if (use_streaming) {
-    read_func = [read_options, fs, csv_path]() {
-      auto input = fs->OpenInputStream(csv_path).ValueOrDie();
-      auto reader =
-          arrow::csv::StreamingReader::Make(
-              arrow::io::default_io_context().pool(), input, read_options,
-              arrow::csv::ParseOptions(), arrow::csv::ConvertOptions())
-              .ValueOrDie();
-      std::shared_ptr<arrow::Table> out;
-      if (!reader->ReadAll(&out).ok()) {
-        abort();
+    auto fs = std::make_shared<arrow::fs::LocalFileSystem>();
+
+    std::function<arrow::Result<std::shared_ptr<arrow::Table>>()> read_func;
+
+    if (use_streaming)
+    {
+      read_func = [&]() -> arrow::Result<std::shared_ptr<arrow::Table>>
+      {
+        ARROW_ASSIGN_OR_RAISE(auto reader,
+                              arrow::csv::StreamingReader::Make(
+                                  arrow::io::default_io_context(),
+                                  fs->OpenInputStream(csv_path).ValueOrDie(),
+                                  read_options, parse_options, convert_options));
+        std::shared_ptr<arrow::Table> table;
+        ARROW_ASSIGN_OR_RAISE(table, reader->ToTable());
+        return table;
       };
-      return out;
-    };
-  } else {
-    read_func = [read_options, fs, csv_path]() {
-      auto input = fs->OpenInputStream(csv_path).ValueOrDie();
-      auto reader =
-          arrow::csv::TableReader::Make(
-              arrow::io::default_io_context(), input, read_options,
-              arrow::csv::ParseOptions(), arrow::csv::ConvertOptions())
-              .ValueOrDie();
-      return reader->Read().ValueOrDie();
-    };
-  }
+    }
+    else
+    {
+      read_func = [&]() -> arrow::Result<std::shared_ptr<arrow::Table>>
+      {
+        ARROW_ASSIGN_OR_RAISE(auto reader,
+                              arrow::csv::TableReader::Make(
+                                  arrow::io::default_io_context(),
+                                  fs->OpenInputStream(csv_path).ValueOrDie(),
+                                  read_options, parse_options, convert_options));
+        return reader->Read();
+      };
+    }
 
-  int64_t total_count = 0;
-  for (int i = 0; i < 1; i++) {
-    auto start = high_resolution_clock::now();
-    auto table = read_func();
-    auto end = high_resolution_clock::now();
+    int64_t total_count = 0;
+    for (int i = 0; i < 1; i++)
+    {
+      auto start = high_resolution_clock::now();
+      auto table = read_func().ValueOrDie();
+      auto end = high_resolution_clock::now();
 
-    auto duration = duration_cast<nanoseconds>(end - start).count();
-    total_count += duration;
+      auto duration = duration_cast<nanoseconds>(end - start).count();
+      total_count += duration;
 
-    std::cout << "* Read table (" << table->num_rows() << ","
-              << table->num_columns() << ")" << std::endl;
-    std::cout.imbue(std::locale(""));
-    std::cout << "Elsaped: " << std::fixed << duration << " nanoseconds"
+      std::cout << "* Read table (" << table->num_rows() << ","
+                << table->num_columns() << ")" << std::endl;
+      std::cout.imbue(std::locale(""));
+      std::cout << "Elsaped: " << std::fixed << duration << " nanoseconds"
+                << std::endl;
+    }
+    std::cout << "Total duration " << std::fixed << total_count << " nanoseconds"
               << std::endl;
-  }
-  std::cout << "Total duration " << std::fixed << total_count << " nanoseconds"
-            << std::endl;
-  // std::cout << "Real futures created: "
-  //           << arrow::FutureCounters::real_futures_created.load() <<
-  //           std::endl;
-  // std::cout << "Finished futures created: "
-  //           << arrow::FutureCounters::finished_futures_created.load()
-  //           << std::endl;
+    // std::cout << "Real futures created: "
+    //           << arrow::FutureCounters::real_futures_created.load() <<
+    //           std::endl;
+    // std::cout << "Finished futures created: "
+    //           << arrow::FutureCounters::finished_futures_created.load()
+    //           << std::endl;
 
-  return Status::OK();
-}
+    return Status::OK();
+  }
 
 } // namespace
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
   Status st = RunMain(argc, argv);
-  if (!st.ok()) {
+  if (!st.ok())
+  {
     std::cerr << st << std::endl;
     return 1;
   }

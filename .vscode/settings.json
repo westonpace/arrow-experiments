@@ -54,7 +54,10 @@
         "cinttypes": "cpp",
         "list": "cpp",
         "unordered_set": "cpp",
-        "map": "cpp"
+        "map": "cpp",
+        "set": "cpp"
     },
-    "python.formatting.provider": "black"
+    "python.formatting.provider": "black",
+    "C_Cpp.default.compilerPath": "${workspacePath}/conbench3-build/compile_commands.json",
+    "C_Cpp.clang_format_fallbackStyle": "Google"
 }
